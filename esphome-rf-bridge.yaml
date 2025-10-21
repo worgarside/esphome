@@ -1,0 +1,185 @@
+esphome:
+  name: esphome-rf-bridge
+  friendly_name: RF Bridge
+  min_version: 2025.9.0
+  name_add_mac_suffix: false
+
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+
+api:
+  services:
+    - service: transmit_code
+      variables:
+        code: string
+      then:
+        repeat:
+          count: 10
+          then:
+            - remote_transmitter.transmit_rc_switch_raw:
+                code: !lambda "return code;"
+                protocol: 1
+
+ota:
+  platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: DEBUG
+
+remote_receiver:
+  id: rx
+  pin: GPIO27
+  dump: rc_switch
+  tolerance: 55%
+  filter: 100us
+  buffer_size: 8kb
+
+  on_rc_switch:
+    - lambda: |-
+        if ((uint32_t) millis() < id(suppress_until_ms)) return;
+        if (x.protocol != 1) return;
+
+        // Map received codes to light actions
+        switch (x.code) {
+          case 2808214794:  // 25%
+            id(rf_light).turn_on().set_brightness(0.25f).perform();
+            break;
+          case 2808214284:  // 50%
+            id(rf_light).turn_on().set_brightness(0.50f).perform();
+            break;
+          case 2808214029:  // 75%
+            id(rf_light).turn_on().set_brightness(0.75f).perform();
+            break;
+          case 2808213519:  // 100%
+            id(rf_light).turn_on().set_brightness(1.00f).perform();
+            break;
+          case 2808217089: {  // ON key → restore last step
+            float steps[4] = {0.25f, 0.50f, 0.75f, 1.00f};
+            int idx = id(last_idx_step);
+            if (idx < 0 || idx > 3) idx = 3;  // safety fallback
+            id(rf_light).turn_on().set_brightness(steps[idx]).perform();
+            break;
+          }
+          case 2808216579:  // OFF
+            id(rf_light).turn_off().perform();
+            break;
+          default:
+            // ignore unknown codes
+            break;
+        }
+
+remote_transmitter:
+  id: tx
+  pin: GPIO33
+  carrier_duty_percent: 100%
+
+output:
+  - platform: template
+    id: rf_sink
+    type: float
+    write_action:
+      - if:
+          condition:
+            lambda: "return state < 0.01f;"
+          then:
+            - lambda: "id(suppress_until_ms) = (uint32_t) millis() + 500;"
+            - repeat:
+                count: 6
+                then:
+                  - remote_transmitter.transmit_rc_switch_raw:
+                      code: "10100111011000011111110000000011" # OFF
+                      protocol: 1
+          else:
+            # choose nearest step (25/50/75/100)
+            - lambda: |-
+                static const float BRIGHTNESS_STEPS[4] = {0.25f, 0.50f, 0.75f, 1.00f};
+
+                int idx = 3;
+                float best = 9.9f;
+                for (int i = 0; i < 4; i++) {
+                  float d = fabsf(state - BRIGHTNESS_STEPS[i]);
+                  if (d < best) { best = d; idx = i; }
+                }
+                id(last_idx_step) = idx;
+
+            - lambda: "id(suppress_until_ms) = (uint32_t) millis() + 500;"
+
+            # Send an ON pulse first
+            - repeat:
+                count: 6
+                then:
+                  - remote_transmitter.transmit_rc_switch_raw:
+                      code: "10100111011000011111111000000001" # ON
+                      protocol: 1
+
+            - lambda: "id(suppress_until_ms) = (uint32_t) millis() + 500;"
+
+            # Send the brightness step
+            - repeat:
+                count: 6
+                then:
+                  - remote_transmitter.transmit_rc_switch_raw:
+                      code: !lambda |-
+                        static const char* BRIGHTNESS_CODES[4] = {
+                          "10100111011000011111010100001010",  // 25%
+                          "10100111011000011111001100001100",  // 50%
+                          "10100111011000011111001000001101",  // 75%
+                          "10100111011000011111000000001111"   // 100%
+                        };
+                        return std::string(BRIGHTNESS_CODES[id(last_idx_step)]);
+                      protocol: 1
+
+globals:
+  - id: last_idx_step
+    type: int
+    restore_value: yes
+    initial_value: "3" # default to 100%
+  - id: suppress_until_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+  - id: recursion_guard
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+light:
+  - platform: monochromatic
+    id: rf_light
+    name: "Will's Office | Grow Light"
+    output: rf_sink
+    default_transition_length: 0s
+    gamma_correct: 1.0
+    restore_mode: ALWAYS_OFF
+    on_state:
+      then:
+        - lambda: |-
+            // prevent infinite recursion
+            if (id(recursion_guard)) { id(recursion_guard) = false; return; }
+
+            static const float BRIGHTNESS_STEPS[4] = {0.25f, 0.50f, 0.75f, 1.00f};
+
+            // current HA brightness 0..1
+            float b = id(rf_light).current_values.get_brightness();
+
+            // bin to nearest of 25/50/75/100 using midpoints
+            int idx;
+            if (b < 0.375f)       idx = 0;     // 25%
+            else if (b < 0.625f)  idx = 1;     // 50%
+            else if (b < 0.875f)  idx = 2;     // 75%
+            else                  idx = 3;     // 100%
+
+            // if HA asked for e.g. 0.36, nudge to 0.25 so UI matches
+            if (fabsf(b - BRIGHTNESS_STEPS[idx]) > 0.005f) {
+              id(recursion_guard) = true;
+              id(last_idx_step) = idx;  // keep our step tracker in sync
+              auto call = id(rf_light).turn_on();
+              call.set_brightness(BRIGHTNESS_STEPS[idx]);
+              call.perform();
+            }
