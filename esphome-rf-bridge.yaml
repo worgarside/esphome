@@ -160,7 +160,7 @@ light:
     on_state:
       then:
         - lambda: |-
-            // prevent recursion when we nudge the UI
+            // prevent infinite recursion
             if (id(snap_guard)) { id(snap_guard) = false; return; }
 
             static const float BRIGHTNESS_STEPS[4] = {0.25f, 0.50f, 0.75f, 1.00f};
