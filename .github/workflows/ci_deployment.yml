@@ -33,7 +33,7 @@ jobs:
     with:
       build-branch: '${{ github.ref }}'
       build-type: ''
-      deploy-to: ''
+      deploy-to: 'submodule:worgarside/home-assistant/esphome'
       deploy-documentation: ''
       node-build-directory: ''
       path-to-__version__-file: ''
