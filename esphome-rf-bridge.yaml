@@ -144,7 +144,7 @@ globals:
     type: uint32_t
     restore_value: no
     initial_value: "0"
-  - id: snap_guard
+  - id: recursion_guard
     type: bool
     restore_value: no
     initial_value: "false"
@@ -161,7 +161,7 @@ light:
       then:
         - lambda: |-
             // prevent infinite recursion
-            if (id(snap_guard)) { id(snap_guard) = false; return; }
+            if (id(recursion_guard)) { id(recursion_guard) = false; return; }
 
             static const float BRIGHTNESS_STEPS[4] = {0.25f, 0.50f, 0.75f, 1.00f};
 
@@ -177,7 +177,7 @@ light:
 
             // if HA asked for e.g. 0.36, nudge to 0.25 so UI matches
             if (fabsf(b - BRIGHTNESS_STEPS[idx]) > 0.005f) {
-              id(snap_guard) = true;
+              id(recursion_guard) = true;
               id(last_idx_step) = idx;  // keep our step tracker in sync
               auto call = id(rf_light).turn_on();
               call.set_brightness(BRIGHTNESS_STEPS[idx]);
