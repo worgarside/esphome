@@ -43,7 +43,8 @@ apt-get install -y \
   git \
   libffi-dev \
   libssl-dev \
-  pkg-config
+  pkg-config \
+  xdg-user-dirs
 
 UV_PYTHON_INSTALL_DIR=/opt/uv/python \
   uv python install "${python_version}"

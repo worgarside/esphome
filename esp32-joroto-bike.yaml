@@ -29,6 +29,13 @@ api:
     key: !secret esp32_joroto_bike__api_key
 
 esp32_ble_tracker:
+  scan_parameters:
+    # Active scanning on the ESP32-C6 can race with stopping the scan to open a
+    # client connection. A wide passive window reliably catches the bike's
+    # normal advertisements without sending scan requests.
+    interval: 1100ms
+    window: 1100ms
+    active: false
 
 ble_client:
   - mac_address: C1:33:36:33:72:71
