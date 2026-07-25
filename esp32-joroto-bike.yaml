@@ -1,0 +1,226 @@
+---
+substitutions:
+  device_name: esp32-joroto-bike
+  friendly_name: JOROTO Exercise Bike
+
+  # The console reports three virtual wheel revolutions per crank revolution.
+  # 1.50 m gives approximately 16.2 km/h at 60 RPM, close to Kinomap's reading.
+  virtual_wheel_revolutions_per_crank: "3.0"
+  virtual_wheel_circumference_m: "1.50"
+
+packages:
+  wifi: !include common/wifi.yaml
+  api: !include common/api.yaml
+  ota: !include common/ota.yaml
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+esp32_ble_tracker:
+
+ble_client:
+  - mac_address: C1:33:36:33:72:71
+    id: joroto_bike
+    on_connect:
+      then:
+        - lambda: |-
+            id(bike_connected).publish_state(true);
+            id(have_previous_csc_sample) = false;
+    on_disconnect:
+      then:
+        - lambda: |-
+            id(bike_connected).publish_state(false);
+            id(bike_pedalling).publish_state(false);
+            id(bike_cadence).publish_state(0.0f);
+            id(bike_speed).publish_state(0.0f);
+            id(have_previous_csc_sample) = false;
+
+globals:
+  - id: previous_crank_revolutions
+    type: uint16_t
+    restore_value: false
+    initial_value: "0"
+  - id: previous_crank_event_time
+    type: uint16_t
+    restore_value: false
+    initial_value: "0"
+  - id: have_previous_csc_sample
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: last_csc_update_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: accumulated_crank_revolutions
+    type: uint64_t
+    restore_value: false
+    initial_value: "0"
+  - id: accumulated_distance_m
+    type: double
+    restore_value: false
+    initial_value: "0.0"
+
+binary_sensor:
+  - platform: template
+    id: bike_connected
+    name: Connected
+    device_class: connectivity
+    entity_category: diagnostic
+
+  - platform: template
+    id: bike_pedalling
+    name: Pedalling
+    device_class: moving
+
+sensor:
+  - platform: template
+    id: bike_cadence
+    name: Cadence
+    icon: mdi:rotate-360
+    unit_of_measurement: rpm
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+
+  - platform: template
+    id: bike_speed
+    name: Speed
+    icon: mdi:speedometer
+    device_class: speed
+    unit_of_measurement: km/h
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+
+  - platform: template
+    id: bike_distance
+    name: Distance
+    icon: mdi:map-marker-distance
+    device_class: distance
+    unit_of_measurement: m
+    accuracy_decimals: 1
+    state_class: total_increasing
+    update_interval: never
+
+  - platform: template
+    id: bike_crank_revolutions
+    name: Crank Revolutions
+    icon: mdi:counter
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: never
+
+  - platform: ble_client
+    type: rssi
+    ble_client_id: joroto_bike
+    name: Bluetooth RSSI
+    entity_category: diagnostic
+    update_interval: 30s
+
+  # Bluetooth Cycling Speed and Cadence service, CSC Measurement characteristic.
+  # Packet layout is defined by the Bluetooth SIG and was verified against this
+  # bike using nRF Connect.
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: joroto_bike
+    id: csc_measurement
+    internal: true
+    service_uuid: "1816"
+    characteristic_uuid: "2A5B"
+    notify: true
+    update_interval: never
+    lambda: |-
+      if (x.empty()) {
+        return NAN;
+      }
+
+      const uint8_t flags = x[0];
+      size_t offset = 1;
+
+      // Skip cumulative wheel revolutions (4 bytes) and wheel event time
+      // (2 bytes) when present.
+      if (flags & 0x01) {
+        offset += 6;
+      }
+
+      // This integration requires crank revolution data.
+      if (!(flags & 0x02) || x.size() < offset + 4) {
+        ESP_LOGW("joroto", "CSC packet did not contain crank data");
+        return NAN;
+      }
+
+      const uint16_t crank_revolutions =
+          static_cast<uint16_t>(x[offset]) |
+          (static_cast<uint16_t>(x[offset + 1]) << 8);
+      const uint16_t crank_event_time =
+          static_cast<uint16_t>(x[offset + 2]) |
+          (static_cast<uint16_t>(x[offset + 3]) << 8);
+
+      id(last_csc_update_ms) = millis();
+
+      if (!id(have_previous_csc_sample)) {
+        id(previous_crank_revolutions) = crank_revolutions;
+        id(previous_crank_event_time) = crank_event_time;
+        id(have_previous_csc_sample) = true;
+        return 0.0f;
+      }
+
+      // Unsigned 16-bit subtraction handles the counters wrapping around.
+      const uint16_t revolution_delta =
+          static_cast<uint16_t>(
+              crank_revolutions - id(previous_crank_revolutions));
+      const uint16_t event_time_delta =
+          static_cast<uint16_t>(
+              crank_event_time - id(previous_crank_event_time));
+
+      id(previous_crank_revolutions) = crank_revolutions;
+      id(previous_crank_event_time) = crank_event_time;
+
+      if (revolution_delta == 0 || event_time_delta == 0) {
+        return id(bike_cadence).state;
+      }
+
+      // Crank event time is measured in 1/1024 second units.
+      const float cadence =
+          revolution_delta * 60.0f * 1024.0f / event_time_delta;
+      const float speed =
+          cadence * ${virtual_wheel_revolutions_per_crank} *
+          ${virtual_wheel_circumference_m} * 60.0f / 1000.0f;
+
+      id(accumulated_crank_revolutions) += revolution_delta;
+      id(accumulated_distance_m) +=
+          revolution_delta * ${virtual_wheel_revolutions_per_crank} *
+          ${virtual_wheel_circumference_m};
+
+      id(bike_cadence).publish_state(cadence);
+      id(bike_speed).publish_state(speed);
+      id(bike_crank_revolutions).publish_state(
+          id(accumulated_crank_revolutions));
+      id(bike_distance).publish_state(id(accumulated_distance_m));
+      id(bike_pedalling).publish_state(true);
+
+      return cadence;
+
+# CSC notifications stop when the flywheel stops, so explicitly return the live
+# entities to zero after three seconds without a revolution update.
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(have_previous_csc_sample) &&
+              static_cast<uint32_t>(millis() - id(last_csc_update_ms)) >
+                  3000) {
+            id(bike_cadence).publish_state(0.0f);
+            id(bike_speed).publish_state(0.0f);
+            id(bike_pedalling).publish_state(false);
+          }
