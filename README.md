@@ -13,7 +13,7 @@ path:
 
 ```shell
 apt update
-apt install -y git just sudo
+apt install -y git just
 mkdir -p /srv/esphome
 git clone git@github.com:worgarside/esphome.git /srv/esphome/config
 cd /srv/esphome/config
@@ -33,7 +33,7 @@ service. The system Python and `pip` are not used.
 To select another supported Python version for the initial setup:
 
 ```shell
-sudo ESPHOME_PYTHON_VERSION=3.12 just setup-esphome
+ESPHOME_PYTHON_VERSION=3.12 just setup-esphome
 ```
 
 The LXC should:
