@@ -1,3 +1,4 @@
 trash/
 secrets.yaml
 .esphome/
+.device-builder*
