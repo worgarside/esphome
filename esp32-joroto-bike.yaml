@@ -26,7 +26,7 @@ logger:
 
 api:
   encryption:
-    key: !secret esp32_joroto_bike_api_key
+    key: !secret api_key
 
 esp32_ble_tracker:
 
