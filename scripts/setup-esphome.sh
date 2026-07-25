@@ -14,15 +14,21 @@ python_version="${ESPHOME_PYTHON_VERSION:-3.13}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "${script_dir}/.." && pwd)"
 
-if [[ "${repo_dir}" != "${config_dir}" ]]; then
-  echo "Clone this repository at ${config_dir}, then run 'just setup-esphome' there." >&2
-  echo "Current repository location: ${repo_dir}" >&2
-  exit 1
-fi
-
 if [[ ! -d "${repo_dir}/.git" ]]; then
   echo "Expected a Git repository at ${repo_dir}." >&2
   exit 1
+fi
+
+if [[ "${repo_dir}" != "${config_dir}" ]]; then
+  if [[ -e "${config_dir}" ]]; then
+    echo "Cannot relocate the repository: ${config_dir} already exists." >&2
+    exit 1
+  fi
+
+  echo "Relocating the repository from ${repo_dir} to ${config_dir}"
+  install -d "$(dirname -- "${config_dir}")"
+  mv "${repo_dir}" "${config_dir}"
+  repo_dir="${config_dir}"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
