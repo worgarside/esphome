@@ -1,0 +1,23 @@
+[Unit]
+Description=ESPHome Device Builder
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=esphome
+Group=esphome
+Environment=HOME=/var/lib/esphome
+EnvironmentFile=-/etc/esphome/environment
+WorkingDirectory=/srv/esphome/config
+ExecStart=/opt/esphome/bin/esphome-device-builder /srv/esphome/config --host 0.0.0.0 --port 6052
+Restart=on-failure
+RestartSec=5
+
+# Keep the service contained without preventing firmware compilation.
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
