@@ -28,7 +28,9 @@ just setup-esphome
 This requires `uv` to already be installed and available in `PATH`. It uses
 `uv` to provision Python 3.13, creates the `esphome` service account, installs
 the latest ESPHome and Device Builder in `/opt/esphome`, and enables the system
-service. The system Python and `pip` are not used.
+service. The system Python and `pip` are not used. If the repository was cloned
+somewhere else, setup relocates it to `/srv/esphome/config` so the unprivileged
+service can access it safely.
 
 To select another supported Python version for the initial setup:
 
