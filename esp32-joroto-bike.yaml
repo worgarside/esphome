@@ -10,7 +10,6 @@ substitutions:
 
 packages:
   wifi: !include common/wifi.yaml
-  api: !include common/api.yaml
   ota: !include common/ota.yaml
 
 esphome:
@@ -24,6 +23,10 @@ esp32:
     type: esp-idf
 
 logger:
+
+api:
+  encryption:
+    key: !secret esp32_joroto_bike_api_key
 
 esp32_ble_tracker:
 
