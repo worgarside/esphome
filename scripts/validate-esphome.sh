@@ -4,14 +4,23 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd -- "${repo_root}"
 
-if [[ ! -f secrets.yaml ]]; then
-  if [[ ! -f secrets.yaml.example ]]; then
-    echo "Missing secrets.yaml and secrets.yaml.example." >&2
-    exit 1
-  fi
-  cp secrets.yaml.example secrets.yaml
-  echo "Created secrets.yaml from secrets.yaml.example for validation."
+if [[ ! -f secrets.yaml.example ]]; then
+  echo "Missing secrets.yaml.example." >&2
+  exit 1
 fi
+
+if [[ -f secrets.yaml ]] && ! cmp -s secrets.yaml secrets.yaml.example; then
+  echo "secrets.yaml differs from secrets.yaml.example." >&2
+  echo "Local validation uses the example file only — remove or update secrets.yaml." >&2
+  exit 1
+fi
+
+cleanup() {
+  rm -f secrets.yaml
+}
+trap cleanup EXIT
+
+cp secrets.yaml.example secrets.yaml
 
 shopt -s nullglob
 configs=(esp32-*.yaml)
