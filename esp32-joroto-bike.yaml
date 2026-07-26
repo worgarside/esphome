@@ -7,6 +7,7 @@ substitutions:
   # 1.50 m gives approximately 16.2 km/h at 60 RPM, close to Kinomap's reading.
   virtual_wheel_revolutions_per_crank: "3.0"
   virtual_wheel_circumference_m: "1.50"
+  pedalling_timeout_ms: "5000"
 
 packages:
   wifi: !include common/wifi.yaml
@@ -49,6 +50,8 @@ ble_client:
       then:
         - lambda: |-
             id(bike_connected).publish_state(false);
+            // A disconnect ends the live reading, but does not erase the
+            // session. The configurable inactivity timer handles that.
             id(bike_pedalling).publish_state(false);
             id(bike_cadence).publish_state(0.0f);
             id(bike_speed).publish_state(0.0f);
@@ -67,8 +70,20 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
-  - id: last_csc_update_ms
+  - id: last_crank_movement_ms
     type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: session_started
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: session_start_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: active_elapsed_ms
+    type: uint64_t
     restore_value: false
     initial_value: "0"
   - id: accumulated_crank_revolutions
@@ -79,6 +94,61 @@ globals:
     type: double
     restore_value: false
     initial_value: "0.0"
+
+script:
+  - id: reset_session
+    mode: restart
+    then:
+      - lambda: |-
+          id(session_started) = false;
+          id(session_start_ms) = 0;
+          id(active_elapsed_ms) = 0;
+          id(last_crank_movement_ms) = 0;
+          id(accumulated_crank_revolutions) = 0;
+          id(accumulated_distance_m) = 0.0;
+          id(have_previous_csc_sample) = false;
+
+          id(bike_pedalling).publish_state(false);
+          id(bike_cadence).publish_state(0.0f);
+          id(bike_speed).publish_state(0.0f);
+          id(bike_distance).publish_state(0.0f);
+          id(bike_crank_revolutions).publish_state(0.0f);
+          id(session_duration).publish_state(0.0f);
+          id(active_duration).publish_state(0.0f);
+
+button:
+  - platform: template
+    name: Reset Session
+    icon: mdi:restart
+    on_press:
+      - script.execute: reset_session
+
+number:
+  - platform: template
+    id: automatic_reset_delay
+    name: Automatic Reset Delay
+    icon: mdi:timer-refresh
+    unit_of_measurement: min
+    mode: box
+    min_value: 0
+    max_value: 120
+    step: 1
+    initial_value: 15
+    optimistic: true
+    restore_value: true
+
+text_sensor:
+  - platform: template
+    id: csc_packet_raw
+    name: CSC Packet Raw
+    icon: mdi:code-brackets
+    entity_category: diagnostic
+
+  - platform: template
+    id: proprietary_packet_raw
+    name: Proprietary Packet Raw
+    icon: mdi:code-brackets
+    entity_category: diagnostic
 
 binary_sensor:
   - platform: template
@@ -130,6 +200,139 @@ sensor:
     state_class: total_increasing
     update_interval: never
 
+  - platform: template
+    id: session_duration
+    name: Session Duration
+    icon: mdi:timer-outline
+    device_class: duration
+    unit_of_measurement: s
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+
+  - platform: template
+    id: active_duration
+    name: Active Time
+    icon: mdi:timer-play-outline
+    device_class: duration
+    unit_of_measurement: s
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+
+  - platform: template
+    id: proprietary_packet_length
+    name: Proprietary Packet Length
+    icon: mdi:ruler
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: never
+
+  # Raw byte values from proprietary FFF1 notifications. Their meaning is
+  # intentionally left unknown so changes can be correlated with load, speed,
+  # time, or other values shown by the bike console.
+  - platform: template
+    id: unknown_value_0
+    name: Unknown Value 0
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_1
+    name: Unknown Value 1
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_2
+    name: Unknown Value 2
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_3
+    name: Unknown Value 3
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_4
+    name: Unknown Value 4
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_5
+    name: Unknown Value 5
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_6
+    name: Unknown Value 6
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_7
+    name: Unknown Value 7
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_8
+    name: Unknown Value 8
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_9
+    name: Unknown Value 9
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_10
+    name: Unknown Value 10
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_11
+    name: Unknown Value 11
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_12
+    name: Unknown Value 12
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_13
+    name: Unknown Value 13
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_14
+    name: Unknown Value 14
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_15
+    name: Unknown Value 15
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_16
+    name: Unknown Value 16
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_17
+    name: Unknown Value 17
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_18
+    name: Unknown Value 18
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: unknown_value_19
+    name: Unknown Value 19
+    accuracy_decimals: 0
+    update_interval: never
+
   - platform: ble_client
     type: rssi
     ble_client_id: joroto_bike
@@ -154,6 +357,17 @@ sensor:
         return NAN;
       }
 
+      std::string raw;
+      for (const uint8_t value : x) {
+        char byte[4];
+        snprintf(byte, sizeof(byte), "%02X", value);
+        if (!raw.empty()) {
+          raw += " ";
+        }
+        raw += byte;
+      }
+      id(csc_packet_raw).publish_state(raw);
+
       const uint8_t flags = x[0];
       size_t offset = 1;
 
@@ -175,8 +389,6 @@ sensor:
       const uint16_t crank_event_time =
           static_cast<uint16_t>(x[offset + 2]) |
           (static_cast<uint16_t>(x[offset + 3]) << 8);
-
-      id(last_csc_update_ms) = millis();
 
       if (!id(have_previous_csc_sample)) {
         id(previous_crank_revolutions) = crank_revolutions;
@@ -200,6 +412,14 @@ sensor:
         return id(bike_cadence).state;
       }
 
+      const uint32_t now = millis();
+      id(last_crank_movement_ms) = now;
+      if (!id(session_started)) {
+        id(session_started) = true;
+        id(session_start_ms) = now;
+        id(active_elapsed_ms) = 0;
+      }
+
       // Crank event time is measured in 1/1024 second units.
       const float cadence =
           revolution_delta * 60.0f * 1024.0f / event_time_delta;
@@ -211,26 +431,96 @@ sensor:
       id(accumulated_distance_m) +=
           revolution_delta * ${virtual_wheel_revolutions_per_crank} *
           ${virtual_wheel_circumference_m};
+      id(active_elapsed_ms) +=
+          static_cast<uint64_t>(event_time_delta) * 1000ULL / 1024ULL;
 
       id(bike_cadence).publish_state(cadence);
       id(bike_speed).publish_state(speed);
       id(bike_crank_revolutions).publish_state(
           id(accumulated_crank_revolutions));
       id(bike_distance).publish_state(id(accumulated_distance_m));
+      id(active_duration).publish_state(id(active_elapsed_ms) / 1000.0f);
       id(bike_pedalling).publish_state(true);
 
       return cadence;
 
-# CSC notifications stop when the flywheel stops, so explicitly return the live
-# entities to zero after three seconds without a revolution update.
+  # Vendor-specific FFF0/FFF1 notifications. Preserve the complete packet as
+  # hex and publish its first 20 bytes separately for pattern hunting in HA.
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: joroto_bike
+    id: proprietary_measurement
+    internal: true
+    service_uuid: "FFF0"
+    characteristic_uuid: "FFF1"
+    notify: true
+    update_interval: never
+    lambda: |-
+      std::string raw;
+      for (const uint8_t value : x) {
+        char byte[4];
+        snprintf(byte, sizeof(byte), "%02X", value);
+        if (!raw.empty()) {
+          raw += " ";
+        }
+        raw += byte;
+      }
+
+      id(proprietary_packet_raw).publish_state(raw);
+      id(proprietary_packet_length).publish_state(x.size());
+      ESP_LOGD("joroto", "FFF1 packet (%u bytes): %s",
+               static_cast<unsigned>(x.size()), raw.c_str());
+
+      id(unknown_value_0).publish_state(x.size() > 0 ? x[0] : NAN);
+      id(unknown_value_1).publish_state(x.size() > 1 ? x[1] : NAN);
+      id(unknown_value_2).publish_state(x.size() > 2 ? x[2] : NAN);
+      id(unknown_value_3).publish_state(x.size() > 3 ? x[3] : NAN);
+      id(unknown_value_4).publish_state(x.size() > 4 ? x[4] : NAN);
+      id(unknown_value_5).publish_state(x.size() > 5 ? x[5] : NAN);
+      id(unknown_value_6).publish_state(x.size() > 6 ? x[6] : NAN);
+      id(unknown_value_7).publish_state(x.size() > 7 ? x[7] : NAN);
+      id(unknown_value_8).publish_state(x.size() > 8 ? x[8] : NAN);
+      id(unknown_value_9).publish_state(x.size() > 9 ? x[9] : NAN);
+      id(unknown_value_10).publish_state(x.size() > 10 ? x[10] : NAN);
+      id(unknown_value_11).publish_state(x.size() > 11 ? x[11] : NAN);
+      id(unknown_value_12).publish_state(x.size() > 12 ? x[12] : NAN);
+      id(unknown_value_13).publish_state(x.size() > 13 ? x[13] : NAN);
+      id(unknown_value_14).publish_state(x.size() > 14 ? x[14] : NAN);
+      id(unknown_value_15).publish_state(x.size() > 15 ? x[15] : NAN);
+      id(unknown_value_16).publish_state(x.size() > 16 ? x[16] : NAN);
+      id(unknown_value_17).publish_state(x.size() > 17 ? x[17] : NAN);
+      id(unknown_value_18).publish_state(x.size() > 18 ? x[18] : NAN);
+      id(unknown_value_19).publish_state(x.size() > 19 ? x[19] : NAN);
+
+      return x.empty() ? NAN : x[0];
+
+# Keep live and session state separate. Live cadence/speed become zero five
+# seconds after the last actual crank movement. Session totals reset only after
+# the user-configured inactivity delay, regardless of BLE connection state.
 interval:
   - interval: 1s
     then:
       - lambda: |-
-          if (id(have_previous_csc_sample) &&
-              static_cast<uint32_t>(millis() - id(last_csc_update_ms)) >
-                  3000) {
+          const uint32_t now = millis();
+
+          if (id(session_started)) {
+            id(session_duration).publish_state(
+                static_cast<uint32_t>(now - id(session_start_ms)) / 1000.0f);
+            id(active_duration).publish_state(
+                id(active_elapsed_ms) / 1000.0f);
+          }
+
+          if (id(session_started) &&
+              static_cast<uint32_t>(now - id(last_crank_movement_ms)) >=
+                  ${pedalling_timeout_ms}) {
             id(bike_cadence).publish_state(0.0f);
             id(bike_speed).publish_state(0.0f);
             id(bike_pedalling).publish_state(false);
+          }
+
+          const float reset_delay_minutes = id(automatic_reset_delay).state;
+          if (id(session_started) && reset_delay_minutes > 0.0f &&
+              static_cast<uint32_t>(now - id(last_crank_movement_ms)) >=
+                  static_cast<uint32_t>(reset_delay_minutes * 60000.0f)) {
+            id(reset_session).execute();
           }
