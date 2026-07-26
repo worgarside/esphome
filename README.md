@@ -73,3 +73,7 @@ just restart         # Restart the service
 
 The initial USB flash still happens in a browser connected to the ESP board;
 the LXC does not need the USB device. Later installations can use OTA.
+
+## Device notes
+
+- [JOROTO X2/X2PRO Bluetooth investigation](docs/joroto-x2-bluetooth.md)
