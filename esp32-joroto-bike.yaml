@@ -124,6 +124,8 @@ button:
       - script.execute: reset_session
 
 number:
+  # Setting this to 0 disables automatic reset; the current session then
+  # continues until Reset Session is pressed manually.
   - platform: template
     id: automatic_reset_delay
     name: Automatic Reset Delay
@@ -235,101 +237,121 @@ sensor:
   - platform: template
     id: unknown_value_0
     name: Unknown Value 0
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_1
     name: Unknown Value 1
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_2
     name: Unknown Value 2
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_3
     name: Unknown Value 3
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_4
     name: Unknown Value 4
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_5
     name: Unknown Value 5
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_6
     name: Unknown Value 6
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_7
     name: Unknown Value 7
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_8
     name: Unknown Value 8
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_9
     name: Unknown Value 9
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_10
     name: Unknown Value 10
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_11
     name: Unknown Value 11
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_12
     name: Unknown Value 12
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_13
     name: Unknown Value 13
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_14
     name: Unknown Value 14
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_15
     name: Unknown Value 15
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_16
     name: Unknown Value 16
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_17
     name: Unknown Value 17
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_18
     name: Unknown Value 18
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: unknown_value_19
     name: Unknown Value 19
+    entity_category: diagnostic
     accuracy_decimals: 0
     update_interval: never
 
@@ -366,7 +388,10 @@ sensor:
         }
         raw += byte;
       }
-      id(csc_packet_raw).publish_state(raw);
+      if (!id(csc_packet_raw).has_state() ||
+          id(csc_packet_raw).state != raw) {
+        id(csc_packet_raw).publish_state(raw);
+      }
 
       const uint8_t flags = x[0];
       size_t offset = 1;
@@ -413,12 +438,28 @@ sensor:
       }
 
       const uint32_t now = millis();
-      id(last_crank_movement_ms) = now;
-      if (!id(session_started)) {
-        id(session_started) = true;
-        id(session_start_ms) = now;
-        id(active_elapsed_ms) = 0;
+      const bool starting_or_resuming =
+          !id(session_started) || id(last_crank_movement_ms) == 0 ||
+          static_cast<uint32_t>(now - id(last_crank_movement_ms)) >=
+              ${pedalling_timeout_ms};
+
+      // Crank event time is a wrapping 16-bit counter. After a pause, use the
+      // first moving sample only as a new baseline so an idle interval of 64s
+      // or more cannot produce bogus cadence or active-time values.
+      if (starting_or_resuming) {
+        if (!id(session_started)) {
+          id(session_started) = true;
+          id(session_start_ms) = now;
+          id(active_elapsed_ms) = 0;
+        }
+        id(last_crank_movement_ms) = now;
+        id(bike_cadence).publish_state(0.0f);
+        id(bike_speed).publish_state(0.0f);
+        id(bike_pedalling).publish_state(true);
+        return 0.0f;
       }
+
+      id(last_crank_movement_ms) = now;
 
       // Crank event time is measured in 1/1024 second units.
       const float cadence =
@@ -466,33 +507,52 @@ sensor:
         raw += byte;
       }
 
-      id(proprietary_packet_raw).publish_state(raw);
-      id(proprietary_packet_length).publish_state(x.size());
-      ESP_LOGD("joroto", "FFF1 packet (%u bytes): %s",
-               static_cast<unsigned>(x.size()), raw.c_str());
+      const bool packet_changed =
+          !id(proprietary_packet_raw).has_state() ||
+          id(proprietary_packet_raw).state != raw;
+      if (packet_changed) {
+        id(proprietary_packet_raw).publish_state(raw);
+        ESP_LOGD("joroto", "FFF1 packet (%u bytes): %s",
+                 static_cast<unsigned>(x.size()), raw.c_str());
+      }
+      if (!id(proprietary_packet_length).has_state() ||
+          id(proprietary_packet_length).state != x.size()) {
+        id(proprietary_packet_length).publish_state(x.size());
+      }
+      auto publish_byte = [&x](sensor::Sensor *target, size_t index) {
+        if (index < x.size()) {
+          const float value = x[index];
+          if (!target->has_state() || target->state != value) {
+            target->publish_state(value);
+          }
+        } else if (target->has_state() && !std::isnan(target->state)) {
+          // Clear a byte which existed in a previous, longer packet.
+          target->publish_state(NAN);
+        }
+      };
 
-      id(unknown_value_0).publish_state(x.size() > 0 ? x[0] : NAN);
-      id(unknown_value_1).publish_state(x.size() > 1 ? x[1] : NAN);
-      id(unknown_value_2).publish_state(x.size() > 2 ? x[2] : NAN);
-      id(unknown_value_3).publish_state(x.size() > 3 ? x[3] : NAN);
-      id(unknown_value_4).publish_state(x.size() > 4 ? x[4] : NAN);
-      id(unknown_value_5).publish_state(x.size() > 5 ? x[5] : NAN);
-      id(unknown_value_6).publish_state(x.size() > 6 ? x[6] : NAN);
-      id(unknown_value_7).publish_state(x.size() > 7 ? x[7] : NAN);
-      id(unknown_value_8).publish_state(x.size() > 8 ? x[8] : NAN);
-      id(unknown_value_9).publish_state(x.size() > 9 ? x[9] : NAN);
-      id(unknown_value_10).publish_state(x.size() > 10 ? x[10] : NAN);
-      id(unknown_value_11).publish_state(x.size() > 11 ? x[11] : NAN);
-      id(unknown_value_12).publish_state(x.size() > 12 ? x[12] : NAN);
-      id(unknown_value_13).publish_state(x.size() > 13 ? x[13] : NAN);
-      id(unknown_value_14).publish_state(x.size() > 14 ? x[14] : NAN);
-      id(unknown_value_15).publish_state(x.size() > 15 ? x[15] : NAN);
-      id(unknown_value_16).publish_state(x.size() > 16 ? x[16] : NAN);
-      id(unknown_value_17).publish_state(x.size() > 17 ? x[17] : NAN);
-      id(unknown_value_18).publish_state(x.size() > 18 ? x[18] : NAN);
-      id(unknown_value_19).publish_state(x.size() > 19 ? x[19] : NAN);
+      publish_byte(id(unknown_value_0), 0);
+      publish_byte(id(unknown_value_1), 1);
+      publish_byte(id(unknown_value_2), 2);
+      publish_byte(id(unknown_value_3), 3);
+      publish_byte(id(unknown_value_4), 4);
+      publish_byte(id(unknown_value_5), 5);
+      publish_byte(id(unknown_value_6), 6);
+      publish_byte(id(unknown_value_7), 7);
+      publish_byte(id(unknown_value_8), 8);
+      publish_byte(id(unknown_value_9), 9);
+      publish_byte(id(unknown_value_10), 10);
+      publish_byte(id(unknown_value_11), 11);
+      publish_byte(id(unknown_value_12), 12);
+      publish_byte(id(unknown_value_13), 13);
+      publish_byte(id(unknown_value_14), 14);
+      publish_byte(id(unknown_value_15), 15);
+      publish_byte(id(unknown_value_16), 16);
+      publish_byte(id(unknown_value_17), 17);
+      publish_byte(id(unknown_value_18), 18);
+      publish_byte(id(unknown_value_19), 19);
 
-      return x.empty() ? NAN : x[0];
+      return NAN;
 
 # Keep live and session state separate. Live cadence/speed become zero five
 # seconds after the last actual crank movement. Session totals reset only after
