@@ -32,10 +32,10 @@ api:
 esp32_ble_tracker:
   scan_parameters:
     # Active scanning on the ESP32-C6 can race with stopping the scan to open a
-    # client connection. A wide passive window reliably catches the bike's
-    # normal advertisements without sending scan requests.
+    # client connection. Keep scanning passive and leave an idle gap between
+    # windows so the controller can transition from scanning to connecting.
     interval: 1100ms
-    window: 1100ms
+    window: 300ms
     active: false
 
 ble_client:
