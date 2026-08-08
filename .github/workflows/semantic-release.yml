@@ -1,0 +1,143 @@
+---
+name: Semantic Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force-deployment:
+        description: Force a release at a specific level, bypassing normal detection
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+jobs:
+  release:
+    name: Release
+    uses: worgarside/github-config-files/.github/workflows/__semantic-release.yml@main
+    with:
+      python-version: '3.13'
+      force-deployment: ${{ inputs.force-deployment != 'auto' && inputs.force-deployment || '' }}
+    secrets: inherit
+
+  deploy-as-submodule:
+    name: Deploy as Submodule
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_REPO: worgarside/home-assistant
+      SUBMODULE_PATH: esphome
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - name: Log Target Repo
+        run: |
+          echo -e "Target repository: \`${TARGET_REPO}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo -e "Submodule path: \`${SUBMODULE_PATH}\`" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Clone Target Repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+          token: ${{ secrets.WORGARSIDE_DEV_TOKEN }}
+          repository: ${{ env.TARGET_REPO }}
+          fetch-depth: 0
+          path: target-repo
+          submodules: true
+
+      - name: Update Submodule
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULE_DEPLOYMENT_TOKEN || secrets.WORGARSIDE_DEV_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SUBMODULE_DEPLOYMENT_TOKEN || secrets.WORGARSIDE_DEV_TOKEN }}
+          SUBMODULE_EMAIL: ${{ vars.SUBMODULE_DEPLOYMENT_EMAIL }}
+          SUBMODULE_USERNAME: ${{ vars.SUBMODULE_DEPLOYMENT_USERNAME }}
+        # yamllint disable rule:line-length
+        run: |
+          cd target-repo
+
+          git config user.email "${SUBMODULE_EMAIL}"
+          git config user.name "${SUBMODULE_USERNAME}"
+          git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+          git submodule init
+          git submodule update --init --recursive
+
+          ROOT_DIR=$(pwd)
+          echo -e "Root Directory: \`${ROOT_DIR}\`" >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ -d "${SUBMODULE_PATH}" ]; then
+            cd "${SUBMODULE_PATH}"
+            echo "Skipping submodule installation for ${SUBMODULE_PATH}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            SUBMODULE_NAME=$(basename "${SUBMODULE_PATH}")
+
+            mkdir -p "${SUBMODULE_PATH}"
+
+            cd "${SUBMODULE_PATH}/.."
+
+            rm -rf "${SUBMODULE_NAME}"
+
+            echo -e "Installing submodule \`${SUBMODULE_NAME}\` at \`$(pwd)\`" >> "${GITHUB_STEP_SUMMARY}"
+
+            git submodule add --force "https://github.com/${{ github.repository }}" "${SUBMODULE_NAME}"
+
+            cd "${SUBMODULE_NAME}"
+
+            echo -e "Installation complete: \`\`\`\n$(ls -lha)\n\`\`\`" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+          git fetch --tags
+          git checkout "tags/${RELEASE_TAG}"
+
+          cd "${ROOT_DIR}"
+
+          echo "PWD: $(pwd)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Deploy Path: ${SUBMODULE_PATH}" >> "${GITHUB_STEP_SUMMARY}"
+
+          git add "${SUBMODULE_PATH}"
+          git commit -m "Bump \`${{ github.repository }}\` to ${RELEASE_TAG}" --no-verify
+
+          echo "Commit Complete, pushing" >> "${GITHUB_STEP_SUMMARY}"
+
+          git push "https://${GH_TOKEN}@github.com/${TARGET_REPO}" \
+            "HEAD:refs/heads/chore/${{ github.repository }}/${RELEASE_TAG}"
+
+          echo "Push Complete" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULE_DEPLOYMENT_TOKEN || secrets.WORGARSIDE_DEV_TOKEN }}
+          PR_BODY_FILE: /tmp/pr_body.txt
+        run: |
+          release_link="# [${RELEASE_TAG}](https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG})"
+
+          release_notes=$(
+            gh release view "${RELEASE_TAG}" --repo "${{ github.repository }}" --json body --jq '.body'
+          )
+
+          echo -e "${release_link}\n${release_notes}" >> "${PR_BODY_FILE}"
+
+          sed -i 's|(\(#\([0-9]\+\)\))$|(${{ github.repository }}#\2)|g' "${PR_BODY_FILE}"
+
+          cat "${PR_BODY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
+
+          pr_url=$(
+            gh pr create \
+              --repo "${TARGET_REPO}" \
+              --title "Bump \`${{ github.repository }}\` to ${RELEASE_TAG}" \
+              --body-file "${PR_BODY_FILE}" \
+              --base "main" \
+              --head "refs/heads/chore/${{ github.repository }}/${RELEASE_TAG}" \
+              --reviewer ${{ github.repository_owner }}
+          )
+
+          gh pr merge --delete-branch --squash --auto "$pr_url"
+        # yamllint enable rule:line-length

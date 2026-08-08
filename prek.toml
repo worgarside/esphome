@@ -1,0 +1,68 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+default_install_hook_types = [
+  "commit-msg",
+  "pre-commit",
+]
+
+[[repos]]
+repo = "https://github.com/compilerla/conventional-pre-commit"
+rev = "v4.4.0"
+hooks = [
+  { id = "conventional-pre-commit", stages = ["commit-msg"] },
+]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "check-added-large-files", args = ["--maxkb=1000"] },
+  { id = "check-case-conflict" },
+  { id = "check-merge-conflict" },
+  { id = "end-of-file-fixer" },
+  { id = "mixed-line-ending" },
+  { id = "trailing-whitespace" },
+]
+
+[[repos]]
+repo = "https://github.com/jumanjihouse/pre-commit-hook-yamlfmt"
+rev = "0.2.3"
+hooks = [
+  { id = "yamlfmt", exclude = "esphome", args = [
+    "--mapping", "2",
+    "--sequence", "4",
+    "--offset", "2",
+    "--width", "4096",
+    "--preserve-quotes",
+  ] },
+]
+
+[[repos]]
+repo = "https://github.com/adrienverge/yamllint"
+rev = "v1.38.0"
+hooks = [
+  { id = "yamllint", args = ["--format", "parsable", "--strict"] },
+]
+
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [
+  { id = "actionlint" },
+]
+
+[[repos]]
+repo = "https://github.com/codespell-project/codespell"
+rev = "v2.4.3"
+hooks = [
+  { id = "codespell", additional_dependencies = ["tomli"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "esphome-config", name = "Validate ESPHome configs", entry = "bash scripts/validate-esphome.sh", language = "python", language_version = "python3.13", additional_dependencies = [
+    "esphome==2026.7.2",
+  ], files = '(?x)^(esp32-.*\.ya?ml|common/.*\.ya?ml)$', pass_filenames = false },
+]
